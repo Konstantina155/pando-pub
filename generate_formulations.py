@@ -4,7 +4,7 @@ os.system("sudo apt install glpk-utils")
 if os.system("mkdir formulations && mkdir outputs") != 0:
     os.system("rm formulations/* && rm outputs/*")
 
-storages = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+storages = [1, 2, 3, 4, 5]
 executables = ['lb', 'pando', 'epaxos', 'mencius', 'multipaxos']
 
 def modify_forms(filename):

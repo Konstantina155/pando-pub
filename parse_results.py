@@ -4,19 +4,10 @@ import numpy as np
 from scipy.integrate import quad
 from tabulate import tabulate
 
-def extract_latency(output_lines):
-    for line in output_lines:
-        if "Objective:" in line and "(MINimum)" in line:
-            parts = line.split('=')
-            if len(parts) > 1:
-                latency = parts[1].strip().split("(MINimum)")[0].strip()
-                return int(latency)
-    print("Objective: LATENCY not found in the file.")
-    exit(1)
-
-path = 'outputs/'
+path = 'outputs'
 files = ['lb', 'pando', 'epaxos', 'mencius', 'multipaxos']
-storages = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+storages = [1, 2, 3, 4, 5]
+reads = writes = [100, 10000, 1000000]
 
 file_to_names = {
     'lb': 'Lower Bound',
@@ -27,38 +18,31 @@ file_to_names = {
     'multipaxos': 'Multi-Paxos'
 }
 
-activity_w = {file: [] for file in files}
-activity_r = {file: [] for file in files}
-read_quorum = {file: [] for file in files}
-write_quorum = {file: [] for file in files}
+def extract_latency(output_lines):
+    for line in output_lines:
+        if "Objective:" in line and "(MINimum)" in line:
+            parts = line.split('=')
+            if len(parts) > 1:
+                latency = parts[1].strip().split("(MINimum)")[0].strip()
+                return int(latency)
+    print("Objective: LATENCY not found in the file.")
+    exit(1)
+
+def reset_globals(files):
+    global activity_w
+    activity_w = {file: [] for file in files}
 
 def extract_specific_latencies(output_lines, filename):
     write_latency = 0
-    latency = 0
-    read_q = 0
-    write_q = 0
     for line in output_lines:
         parts = line.split()
         if len(parts) > 2:
-            if parts[1].startswith("R_10"):
-                read_q += float(parts[3])
-                if parts[2] != "*":
-                    print("Read quorum not found.")
-            elif parts[1].startswith("W_10"):
-                write_q += float(parts[3])
-                if parts[2] != "*":
-                    print("Write quorum not found.")
-            elif parts[1] == "WL_10":
-                write_latency += float(parts[2])
-            elif parts[1] == "L_10":
-                latency += float(parts[2])
+            if "WL" in parts[1]:
+                if parts[2] == "*":
+                    write_latency += float(parts[3])
+                else:
+                    write_latency += float(parts[2])
     activity_w.get(filename).append(write_latency)
-    if filename != 'pando':
-        if write_latency < latency:
-            latency -= write_latency
-    activity_r.get(filename).append(latency)
-    read_quorum.get(filename).append(read_q)
-    write_quorum.get(filename).append(write_q)
 
 def integrand(x, approach):
     if activity_w[approach][int(x)] != 0 and activity_w['lb'][int(x)] < activity_w[approach][int(x)]:
@@ -83,7 +67,7 @@ def plot_latency(latencies, read_or_write='Write'):
     bar_width = group_width / num_systems
     x = np.arange(num_groups)
 
-    plt.figure(figsize=(12, 6))
+    plt.figure(figsize=(14, 8))
     for i, system in enumerate(systems):
         bar_positions = x + i * bar_width
         plt.bar(bar_positions, latencies[system][:num_groups], bar_width, label=file_to_names.get(system, system))
@@ -93,7 +77,7 @@ def plot_latency(latencies, read_or_write='Write'):
     plt.xticks(x + group_width / 2 - bar_width / 2, [f'{i+1}' for i in range(num_groups)], fontsize=11)
     plt.yticks(fontsize=11)
 
-    plt.legend(loc='upper left', frameon=False, handleheight=1.3, handlelength=2.3, fontsize=12, markerscale=1.5)
+    plt.legend(loc='upper left', frameon=False, handleheight=1.3, handlelength=2.3, fontsize=10, markerscale=1.5)
     legend = plt.gca().get_legend()
     for handle in legend.legend_handles:
         handle.set_edgecolor('black')
@@ -117,24 +101,67 @@ def create_table(gap_volumes):
 
 
 def main():
-    latencies = {file: [] for file in files}
-    gap_volume = {file: [] for file in files}
-    for filename in files:
-        for storage in storages:
-            full_path = f"{path}form_{filename}_{storage}.sol"
-            with open(full_path, 'r') as file:
-                output_lines = file.readlines()
+    results_activity_w = {}
+    for read in reads:
+        for write in writes:
+            reset_globals(files)
 
-            if storage < 6:
-                print(f"Extracting LATENCY value from file: {full_path}")
-                latency = extract_latency(output_lines)
-                print(f"Extracted value: {latency}")
-                if latencies.get(filename) is not None:
-                    latencies.get(filename).append(latency)
-                else:
-                    print(f"Error: {filename} not found in latencies dictionary.")
+            for filename in files:
+                for storage in storages:
+                    full_path = f"{path}/form_{filename}_{storage}_10rep_{read}r_{write}w.sol"
+                    with open(full_path, 'r') as file:
+                        output_lines = file.readlines()
 
-            extract_specific_latencies(output_lines, filename)
+                    extract_specific_latencies(output_lines, filename)
+
+            results_activity_w[(read, write)] = {file: activity_w[file][:] for file in files}
+
+            print()
+            print(f"Reads: {read}, Writes: {write}")
+            print(f"Activity for w:\n {activity_w}")
+
+    fig, axes = plt.subplots(3, 3)
+    fig.subplots_adjust(hspace=1, wspace=0.8)
+    colors = ['blue', 'orange', 'green', 'red', 'purple']
+    systems = files
+    
+    for i, read in enumerate(reads):
+        for j, write in enumerate(writes):
+            ax = axes[i, j]
+            key = (read, write)
+
+            activity_data = results_activity_w.get(key, None)
+            if not activity_data:
+                ax.text(0.5, 0.5, "No Data", ha='center', va='center', fontsize=12)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                continue
+
+            bar_data = {system: [activity_data[system][storage - 1] for storage in storages] for system in systems}
+
+            # Plot the bar chart
+            num_systems = len(systems)
+            bar_width = 0.15
+            x = np.arange(len(storages))
+
+            for k, system in enumerate(systems):
+                ax.bar(x + k * bar_width, bar_data[system], bar_width, label=file_to_names.get(system, system), color=colors[k])
+
+            ax.set_title(f"Reads: {read}, Writes: {write}", fontsize=8)
+            ax.set_ylabel("Latency (ms)", fontsize=9)
+            ax.set_xlabel("Storage Overhead", fontsize=9)
+            ax.set_xticks(x + (num_systems - 1) * bar_width / 2)
+            ax.set_xticklabels([str(s) for s in storages])
+            ax.tick_params(axis='x', labelsize=8)
+            ax.tick_params(axis='y', labelsize=8)
+
+            if i == 2 and j == 2:
+                ax.legend(loc='upper center', bbox_to_anchor=(-1.4, 5.7), ncol=5, fontsize=8)
+
+    plt.tight_layout()
+    plt.savefig("grid_latency_barplot.pdf", format='pdf')
+    plt.show()
+    exit(0)
 
     print()
     for filename in files:
@@ -143,14 +170,7 @@ def main():
     
     create_table(gap_volume)
 
-    print()
-    print(f"Activity for w:\n {activity_w}")
-    print(f"Activity for r:\n {activity_r}")
-    print(f"Read quorum:\n {read_quorum}")
-    print(f"Write quorum:\n {write_quorum}")
-
     plot_latency(activity_w)
-    plot_latency(activity_r, 'Read')
 
 if __name__ == '__main__':
 	main()
